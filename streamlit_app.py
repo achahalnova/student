@@ -8,7 +8,7 @@ import os
 st.set_page_config(page_title="Student Excel Analyzer", page_icon="📊", layout="centered")
 
 st.title("Student Results Analyzer 📊")
-st.write("Upload your weekly Aakash Excel file. This app will instantly filter the NSPIRA-CC branch, format the ranks (Top 33% = Green, Middle = Yellow, Bottom = Red), and give you the clean file!")
+st.write("Upload your weekly  Excel file. This app will instantly filter the NSPIRA-CC branch, format the ranks (Top 33% = Green, Middle = Yellow, Bottom = Red), and give you the clean file!")
 
 exam_type = st.radio("Select Exam Type:", ["Engineering (JEE)", "Medical (NEET)"])
 uploaded_file = st.file_uploader("Upload Student Results Excel", type=["xlsx", "xls", "csv"])
