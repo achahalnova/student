@@ -27,18 +27,24 @@ if uploaded_file is not None:
             st.error("Error: Excel file does not contain enough rows to analyze.")
             st.stop()
             
-        data_rows = df_raw.iloc[2:]
-        
-        # Dynamic Column Discovery
-        header_row = [str(x).strip() for x in df_raw.iloc[1].tolist()]
+        # Dynamic Header Row Discovery
+        header_row_idx = 1
+        for idx in range(min(10, len(df_raw))):
+            row_vals = [str(x).upper().strip() for x in df_raw.iloc[idx].tolist()]
+            if 'NAME' in row_vals or 'BRANCH' in row_vals:
+                header_row_idx = idx
+                break
+                
+        data_rows = df_raw.iloc[header_row_idx + 1:]
+        header_row = [str(x).strip() for x in df_raw.iloc[header_row_idx].tolist()]
 
         def get_first_idx(col_name_or_list, start_idx=0, required=True):
-            col_names = col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list]
+            col_names = [str(c).upper().strip() for c in (col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list])]
             for i in range(start_idx, len(header_row)):
-                if header_row[i] in col_names:
+                if str(header_row[i]).upper().strip() in col_names:
                     return i
             if required:
-                st.error(f"Error: Could not find column '{col_names}' in the Excel header.")
+                st.error(f"Error: Could not find column '{col_name_or_list}' in the Excel header.")
                 st.stop()
             return None
             
