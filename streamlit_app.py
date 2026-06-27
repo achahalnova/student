@@ -43,23 +43,34 @@ if uploaded_file is not None:
         branch_idx = get_first_idx('BRANCH')
         name_idx = get_first_idx('NAME')
         
-        mm_idx = get_first_idx('MM')
+        mm_idx = get_first_idx('MM', 0)
         mr_idx = get_first_idx('MR', mm_idx)
         mw_idx = get_first_idx('W', mm_idx)
         
-        pm_idx = get_first_idx('PM', mw_idx)
+        pm_idx = get_first_idx('PM', 0)
         pr_idx = get_first_idx('PR', pm_idx)
         pw_idx = get_first_idx('W', pm_idx)
         
-        cm_idx = get_first_idx('CM', pw_idx)
+        cm_idx = get_first_idx('CM', 0)
         cr_idx = get_first_idx('CR', cm_idx)
         cw_idx = get_first_idx('W', cm_idx)
         
-        tm_idx = get_first_idx(['TM', 'Total'], cw_idx)
+        tm_idx = get_first_idx(['TM', 'Total'], 0)
         tr_idx = get_first_idx('TR', tm_idx)
 
-        # Allow user to specify branch
-        target_branch = st.text_input("Enter branch to filter by:", value="MH-MUM-NSP-NSPIRA-CC")
+        # Extract unique branches
+        all_branches = data_rows[branch_idx].dropna().unique().tolist()
+        mh_mum_branches = [str(b) for b in all_branches if str(b).startswith("MH-MUM")]
+        
+        # Fallback to all branches if no MH-MUM branches exist
+        branch_options = mh_mum_branches if mh_mum_branches else [str(b) for b in all_branches]
+        
+        if not branch_options:
+            st.warning("No branches were found in the uploaded file.")
+            st.stop()
+
+        # Allow user to select branch from dropdown
+        target_branch = st.selectbox("Select branch to filter by:", options=branch_options)
 
         st.info(f"Filtering for branch {target_branch}...")
         df_filtered = data_rows[data_rows[branch_idx] == target_branch].copy()
@@ -112,6 +123,9 @@ if uploaded_file is not None:
         # Apply colors using openpyxl on the buffer
         wb = openpyxl.load_workbook(output_buffer)
         ws = wb.active
+
+        # Set NAME column width to comfortably fit long names (e.g., 3 words of 6 letters)
+        ws.column_dimensions['A'].width = 25
 
         green_fill = PatternFill(start_color="00FF00", end_color="00FF00", fill_type="solid")
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
