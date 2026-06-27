@@ -8,7 +8,7 @@ import os
 st.set_page_config(page_title="Student Excel Analyzer", page_icon="📊", layout="centered")
 
 st.title("Student Results Analyzer 📊")
-st.write("Upload your weekly  Excel file. This app will instantly filter the NSPIRA-CC branch, format the ranks (Top 33% = Green, Middle = Yellow, Bottom = Red), and give you the clean file!")
+st.write("Upload your weekly Aakash Excel file. This app will instantly filter the NSPIRA-CC branch, format the ranks (Top 33% = Green, Middle = Yellow, Bottom = Red), and give you the clean file!")
 
 exam_type = st.radio("Select Exam Type:", ["Engineering (JEE)", "Medical (NEET)"])
 uploaded_file = st.file_uploader("Upload Student Results Excel", type=["xlsx", "xls", "csv"])
@@ -121,35 +121,53 @@ if uploaded_file is not None:
         for col in cols_to_convert:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce')
 
-        def get_tertiles(series):
-            s = series.dropna()
-            if len(s) == 0: return [], [], []
-            try:
-                bins = pd.qcut(s, q=3, labels=False, duplicates='drop')
-                best_indices = bins[bins == 0].index.tolist()
-                avg_indices = bins[bins == 1].index.tolist()
-                worst_indices = bins[bins == 2].index.tolist()
+        def get_tertiles(local_series, global_series):
+            s_local = local_series.dropna()
+            s_global = global_series.dropna()
+            
+            if len(s_local) == 0 or len(s_global) == 0: 
+                return [], [], []
                 
-                if len(set(bins)) < 3:
-                     p33 = s.quantile(0.33)
-                     p66 = s.quantile(0.66)
-                     best_indices = s[s <= p33].index.tolist()
-                     avg_indices = s[(s > p33) & (s <= p66)].index.tolist()
-                     worst_indices = s[s > p66].index.tolist()
+            try:
+                p33 = s_global.quantile(0.33)
+                p66 = s_global.quantile(0.66)
+                
+                # For ranks, smaller value is better
+                best_indices = s_local[s_local <= p33].index.tolist()
+                avg_indices = s_local[(s_local > p33) & (s_local <= p66)].index.tolist()
+                worst_indices = s_local[s_local > p66].index.tolist()
             except:
                 return [], [], []
+                
             return best_indices, worst_indices, avg_indices
 
-        st.info("Calculating Rank percentiles and coloring...")
-        best_p, worst_p, avg_p = get_tertiles(df_final['PR'])
-        best_c, worst_c, avg_c = get_tertiles(df_final['CR'])
-        best_t, worst_t, avg_t = get_tertiles(df_final['TR'])
+        # Create df_global for calculating global cutoffs (excluding CO branches)
+        if branch_idx is not None:
+            is_co_branch = data_rows[branch_idx].astype(str).str.upper().str.contains('CO')
+            data_rows_global = data_rows[~is_co_branch].copy()
+        else:
+            data_rows_global = data_rows.copy()
+            
+        if exam_type == "Medical (NEET)":
+            df_global = data_rows_global.iloc[:, req_indices].copy()
+            df_global.columns = ['NAME', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'BM', 'BR', 'Botany W', 'ZM', 'ZR', 'Zoology W', 'TM', 'TR']
+        else:
+            df_global = data_rows_global.iloc[:, req_indices].copy()
+            df_global.columns = ['NAME', 'MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
+
+        for col in cols_to_convert:
+            df_global[col] = pd.to_numeric(df_global[col], errors='coerce')
+
+        st.info("Calculating global Rank percentiles (excluding CO branches) and coloring...")
+        best_p, worst_p, avg_p = get_tertiles(df_final['PR'], df_global['PR'])
+        best_c, worst_c, avg_c = get_tertiles(df_final['CR'], df_global['CR'])
+        best_t, worst_t, avg_t = get_tertiles(df_final['TR'], df_global['TR'])
 
         if exam_type == "Medical (NEET)":
-            best_b, worst_b, avg_b = get_tertiles(df_final['BR'])
-            best_z, worst_z, avg_z = get_tertiles(df_final['ZR'])
+            best_b, worst_b, avg_b = get_tertiles(df_final['BR'], df_global['BR'])
+            best_z, worst_z, avg_z = get_tertiles(df_final['ZR'], df_global['ZR'])
         else:
-            best_m, worst_m, avg_m = get_tertiles(df_final['MR'])
+            best_m, worst_m, avg_m = get_tertiles(df_final['MR'], df_global['MR'])
 
         # Save to memory buffer instead of disk for web download 
         output_buffer = io.BytesIO()
