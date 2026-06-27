@@ -10,6 +10,7 @@ st.set_page_config(page_title="Student Excel Analyzer", page_icon="📊", layout
 st.title("Student Results Analyzer 📊")
 st.write("Upload your weekly Aakash Excel file. This app will instantly filter the NSPIRA-CC branch, format the ranks (Top 33% = Green, Middle = Yellow, Bottom = Red), and give you the clean file!")
 
+exam_type = st.radio("Select Exam Type:", ["Engineering (JEE)", "Medical (NEET)"])
 uploaded_file = st.file_uploader("Upload Student Results Excel", type=["xlsx", "xls", "csv"])
 
 if uploaded_file is not None:
@@ -20,32 +21,44 @@ if uploaded_file is not None:
         if uploaded_file.name.lower().endswith(".csv"):
             df_raw = pd.read_csv(uploaded_file, header=None)
         else:
-            df_raw = pd.read_excel(uploaded_file, header=None)
+            if exam_type == "Medical (NEET)":
+                try:
+                    df_raw = pd.read_excel(uploaded_file, sheet_name='EST', header=None)
+                except Exception:
+                    st.warning("Could not find 'EST' sheet. Falling back to the first sheet...")
+                    df_raw = pd.read_excel(uploaded_file, header=None)
+            else:
+                df_raw = pd.read_excel(uploaded_file, header=None)
         
         # Check if file has enough rows
         if len(df_raw) < 3:
             st.error("Error: Excel file does not contain enough rows to analyze.")
             st.stop()
             
-        data_rows = df_raw.iloc[2:]
-        
-        # Dynamic Column Discovery
-        header_row = [str(x).strip() for x in df_raw.iloc[1].tolist()]
+        # Dynamic Header Row Discovery
+        header_row_idx = 1
+        for idx in range(min(15, len(df_raw))):
+            row_vals = [str(x).upper().strip() for x in df_raw.iloc[idx].tolist()]
+            if 'NAME' in row_vals or 'STUDENT NAME' in row_vals or 'BRANCH' in row_vals:
+                header_row_idx = idx
+                break
+                
+        data_rows = df_raw.iloc[header_row_idx + 1:]
+        header_row = [str(x).strip() for x in df_raw.iloc[header_row_idx].tolist()]
 
-        def get_first_idx(col_name_or_list, start_idx=0):
-            col_names = col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list]
+        def get_first_idx(col_name_or_list, start_idx=0, required=True):
+            col_names = [str(c).upper().strip() for c in (col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list])]
             for i in range(start_idx, len(header_row)):
-                if header_row[i] in col_names:
+                if str(header_row[i]).upper().strip() in col_names:
                     return i
-            st.error(f"Error: Could not find column '{col_names}' in the Excel header.")
-            st.stop()
+            if required:
+                available_cols = ", ".join([str(x).strip() for x in header_row if str(x).strip() and str(x).strip().lower() != 'nan'])
+                st.error(f"Error: Could not find column '{col_name_or_list}' in the Excel header. Available columns in detected header row: {available_cols}")
+                st.stop()
+            return None
             
-        branch_idx = get_first_idx('BRANCH')
-        name_idx = get_first_idx('NAME')
-        
-        mm_idx = get_first_idx('MM', 0)
-        mr_idx = get_first_idx('MR', mm_idx)
-        mw_idx = get_first_idx('W', mm_idx)
+        branch_idx = get_first_idx(['BRANCH', 'CAMPUS', 'CENTRE'], required=False)
+        name_idx = get_first_idx(['NAME', 'STUDENT NAME'])
         
         pm_idx = get_first_idx('PM', 0)
         pr_idx = get_first_idx('PR', pm_idx)
@@ -55,38 +68,56 @@ if uploaded_file is not None:
         cr_idx = get_first_idx('CR', cm_idx)
         cw_idx = get_first_idx('W', cm_idx)
         
+        if exam_type == "Medical (NEET)":
+            bm_idx = get_first_idx('BM', 0)
+            br_idx = get_first_idx('BR', bm_idx)
+            bw_idx = get_first_idx('W', bm_idx)
+            
+            zm_idx = get_first_idx('ZM', 0)
+            zr_idx = get_first_idx('ZR', zm_idx)
+            zw_idx = get_first_idx('W', zm_idx)
+        else:
+            mm_idx = get_first_idx('MM', 0)
+            mr_idx = get_first_idx('MR', mm_idx)
+            mw_idx = get_first_idx('W', mm_idx)
+            
         tm_idx = get_first_idx(['TM', 'Total'], 0)
         tr_idx = get_first_idx('TR', tm_idx)
 
-        # Extract unique branches
-        all_branches = data_rows[branch_idx].dropna().unique().tolist()
-        mh_mum_branches = [str(b) for b in all_branches if str(b).startswith("MH-MUM")]
-        
-        # Fallback to all branches if no MH-MUM branches exist
-        branch_options = mh_mum_branches if mh_mum_branches else [str(b) for b in all_branches]
-        
-        if not branch_options:
-            st.warning("No branches were found in the uploaded file.")
-            st.stop()
+        # Extract unique branches and fallback
+        if branch_idx is not None:
+            all_branches = data_rows[branch_idx].dropna().unique().tolist()
+            mh_mum_branches = [str(b) for b in all_branches if str(b).startswith("MH-MUM")]
+            
+            branch_options = mh_mum_branches if mh_mum_branches else [str(b) for b in all_branches]
+            
+            if not branch_options:
+                st.warning("No branches were found in the uploaded file. Showing all students.")
+                df_filtered = data_rows.copy()
+            else:
+                target_branch = st.selectbox("Select branch to filter by:", options=branch_options)
+                st.info(f"Filtering for branch {target_branch}...")
+                df_filtered = data_rows[data_rows[branch_idx] == target_branch].copy()
+                if df_filtered.empty:
+                    st.warning(f"No students found for branch '{target_branch}'.")
+                    st.stop()
+        else:
+            st.info("No BRANCH column found. Showing all students.")
+            df_filtered = data_rows.copy()
 
-        # Allow user to select branch from dropdown
-        target_branch = st.selectbox("Select branch to filter by:", options=branch_options)
+        if exam_type == "Medical (NEET)":
+            req_indices = [name_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, bm_idx, br_idx, bw_idx, zm_idx, zr_idx, zw_idx, tm_idx, tr_idx]
+            df_final = df_filtered.iloc[:, req_indices].copy()
+            df_final.columns = ['NAME', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'BM', 'BR', 'Botany W', 'ZM', 'ZR', 'Zoology W', 'TM', 'TR']
+            cols_to_convert = ['PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'BM', 'BR', 'Botany W', 'ZM', 'ZR', 'Zoology W', 'TM', 'TR']
+        else:
+            req_indices = [name_idx, mm_idx, mr_idx, mw_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, tm_idx, tr_idx]
+            df_final = df_filtered.iloc[:, req_indices].copy()
+            df_final.columns = ['NAME', 'MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
+            cols_to_convert = ['MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
 
-        st.info(f"Filtering for branch {target_branch}...")
-        df_filtered = data_rows[data_rows[branch_idx] == target_branch].copy()
-
-        if df_filtered.empty:
-            st.warning(f"No students found for branch '{target_branch}'.")
-            st.stop()
-
-        req_indices = [name_idx, mm_idx, mr_idx, mw_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, tm_idx, tr_idx]
-        df_final = df_filtered.iloc[:, req_indices].copy()
-
-        # Set headers
-        df_final.columns = ['NAME', 'MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
         df_final = df_final.reset_index(drop=True)
 
-        cols_to_convert = ['MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
         for col in cols_to_convert:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce')
 
@@ -110,10 +141,15 @@ if uploaded_file is not None:
             return best_indices, worst_indices, avg_indices
 
         st.info("Calculating Rank percentiles and coloring...")
-        best_m, worst_m, avg_m = get_tertiles(df_final['MR'])
         best_p, worst_p, avg_p = get_tertiles(df_final['PR'])
         best_c, worst_c, avg_c = get_tertiles(df_final['CR'])
         best_t, worst_t, avg_t = get_tertiles(df_final['TR'])
+
+        if exam_type == "Medical (NEET)":
+            best_b, worst_b, avg_b = get_tertiles(df_final['BR'])
+            best_z, worst_z, avg_z = get_tertiles(df_final['ZR'])
+        else:
+            best_m, worst_m, avg_m = get_tertiles(df_final['MR'])
 
         # Save to memory buffer instead of disk for web download 
         output_buffer = io.BytesIO()
@@ -143,10 +179,15 @@ if uploaded_file is not None:
             for idx in avg_indices: ws.cell(row=idx+2, column=col_idx).fill = yellow_fill
             for idx in worst_indices: ws.cell(row=idx+2, column=col_idx).fill = red_fill
 
-        apply_color(ws, 'MR', best_m, worst_m, avg_m)
         apply_color(ws, 'PR', best_p, worst_p, avg_p)
         apply_color(ws, 'CR', best_c, worst_c, avg_c)
         apply_color(ws, 'TR', best_t, worst_t, avg_t)
+
+        if exam_type == "Medical (NEET)":
+            apply_color(ws, 'BR', best_b, worst_b, avg_b)
+            apply_color(ws, 'ZR', best_z, worst_z, avg_z)
+        else:
+            apply_color(ws, 'MR', best_m, worst_m, avg_m)
 
         final_buffer = io.BytesIO()
         wb.save(final_buffer)
