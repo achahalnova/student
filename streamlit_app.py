@@ -27,32 +27,25 @@ if uploaded_file is not None:
             st.error("Error: Excel file does not contain enough rows to analyze.")
             st.stop()
             
-        # Dynamic Header Row Discovery
-        header_row_idx = 1
-        for idx in range(min(10, len(df_raw))):
-            row_vals = [str(x).upper().strip() for x in df_raw.iloc[idx].tolist()]
-            if 'NAME' in row_vals or 'BRANCH' in row_vals:
-                header_row_idx = idx
-                break
-                
-        data_rows = df_raw.iloc[header_row_idx + 1:]
-        header_row = [str(x).strip() for x in df_raw.iloc[header_row_idx].tolist()]
+        data_rows = df_raw.iloc[2:]
+        
+        # Dynamic Column Discovery
+        header_row = [str(x).strip() for x in df_raw.iloc[1].tolist()]
 
-        def get_first_idx(col_name_or_list, start_idx=0, required=True):
-            col_names = [str(c).upper().strip() for c in (col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list])]
+        def get_first_idx(col_name_or_list, start_idx=0):
+            col_names = col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list]
             for i in range(start_idx, len(header_row)):
-                if str(header_row[i]).upper().strip() in col_names:
+                if header_row[i] in col_names:
                     return i
-            if required:
-                st.error(f"Error: Could not find column '{col_name_or_list}' in the Excel header.")
-                st.stop()
-            return None
+            st.error(f"Error: Could not find column '{col_names}' in the Excel header.")
+            st.stop()
             
         branch_idx = get_first_idx('BRANCH')
         name_idx = get_first_idx('NAME')
         
-        # Determine if it's NEET (Botany/Zoology) or JEE (Math)
-        is_neet = get_first_idx('BM', 0, required=False) is not None and get_first_idx('ZM', 0, required=False) is not None
+        mm_idx = get_first_idx('MM', 0)
+        mr_idx = get_first_idx('MR', mm_idx)
+        mw_idx = get_first_idx('W', mm_idx)
         
         pm_idx = get_first_idx('PM', 0)
         pr_idx = get_first_idx('PR', pm_idx)
@@ -61,19 +54,6 @@ if uploaded_file is not None:
         cm_idx = get_first_idx('CM', 0)
         cr_idx = get_first_idx('CR', cm_idx)
         cw_idx = get_first_idx('W', cm_idx)
-        
-        if is_neet:
-            bm_idx = get_first_idx('BM', 0)
-            br_idx = get_first_idx('BR', bm_idx)
-            bw_idx = get_first_idx('W', bm_idx)
-            
-            zm_idx = get_first_idx('ZM', 0)
-            zr_idx = get_first_idx('ZR', zm_idx)
-            zw_idx = get_first_idx('W', zm_idx)
-        else:
-            mm_idx = get_first_idx('MM', 0)
-            mr_idx = get_first_idx('MR', mm_idx)
-            mw_idx = get_first_idx('W', mm_idx)
         
         tm_idx = get_first_idx(['TM', 'Total'], 0)
         tr_idx = get_first_idx('TR', tm_idx)
@@ -99,19 +79,14 @@ if uploaded_file is not None:
             st.warning(f"No students found for branch '{target_branch}'.")
             st.stop()
 
-        if is_neet:
-            req_indices = [name_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, bm_idx, br_idx, bw_idx, zm_idx, zr_idx, zw_idx, tm_idx, tr_idx]
-            df_final = df_filtered.iloc[:, req_indices].copy()
-            df_final.columns = ['NAME', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'BM', 'BR', 'Botany W', 'ZM', 'ZR', 'Zoology W', 'TM', 'TR']
-            cols_to_convert = ['PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'BM', 'BR', 'Botany W', 'ZM', 'ZR', 'Zoology W', 'TM', 'TR']
-        else:
-            req_indices = [name_idx, mm_idx, mr_idx, mw_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, tm_idx, tr_idx]
-            df_final = df_filtered.iloc[:, req_indices].copy()
-            df_final.columns = ['NAME', 'MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
-            cols_to_convert = ['MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
+        req_indices = [name_idx, mm_idx, mr_idx, mw_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, tm_idx, tr_idx]
+        df_final = df_filtered.iloc[:, req_indices].copy()
 
+        # Set headers
+        df_final.columns = ['NAME', 'MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
         df_final = df_final.reset_index(drop=True)
 
+        cols_to_convert = ['MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
         for col in cols_to_convert:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce')
 
@@ -135,15 +110,10 @@ if uploaded_file is not None:
             return best_indices, worst_indices, avg_indices
 
         st.info("Calculating Rank percentiles and coloring...")
+        best_m, worst_m, avg_m = get_tertiles(df_final['MR'])
         best_p, worst_p, avg_p = get_tertiles(df_final['PR'])
         best_c, worst_c, avg_c = get_tertiles(df_final['CR'])
         best_t, worst_t, avg_t = get_tertiles(df_final['TR'])
-
-        if is_neet:
-            best_b, worst_b, avg_b = get_tertiles(df_final['BR'])
-            best_z, worst_z, avg_z = get_tertiles(df_final['ZR'])
-        else:
-            best_m, worst_m, avg_m = get_tertiles(df_final['MR'])
 
         # Save to memory buffer instead of disk for web download 
         output_buffer = io.BytesIO()
@@ -173,15 +143,10 @@ if uploaded_file is not None:
             for idx in avg_indices: ws.cell(row=idx+2, column=col_idx).fill = yellow_fill
             for idx in worst_indices: ws.cell(row=idx+2, column=col_idx).fill = red_fill
 
+        apply_color(ws, 'MR', best_m, worst_m, avg_m)
         apply_color(ws, 'PR', best_p, worst_p, avg_p)
         apply_color(ws, 'CR', best_c, worst_c, avg_c)
         apply_color(ws, 'TR', best_t, worst_t, avg_t)
-
-        if is_neet:
-            apply_color(ws, 'BR', best_b, worst_b, avg_b)
-            apply_color(ws, 'ZR', best_z, worst_z, avg_z)
-        else:
-            apply_color(ws, 'MR', best_m, worst_m, avg_m)
 
         final_buffer = io.BytesIO()
         wb.save(final_buffer)
