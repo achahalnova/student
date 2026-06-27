@@ -3,20 +3,24 @@ import pandas as pd
 import openpyxl
 from openpyxl.styles import PatternFill
 import io
+import os
 
 st.set_page_config(page_title="Student Excel Analyzer", page_icon="📊", layout="centered")
 
 st.title("Student Results Analyzer 📊")
 st.write("Upload your weekly Aakash Excel file. This app will instantly filter the NSPIRA-CC branch, format the ranks (Top 33% = Green, Middle = Yellow, Bottom = Red), and give you the clean file!")
 
-uploaded_file = st.file_uploader("Upload Student Results Excel", type=["xlsx", "xls"])
+uploaded_file = st.file_uploader("Upload Student Results Excel", type=["xlsx", "xls", "csv"])
 
 if uploaded_file is not None:
-    st.info("Reading Excel file...")
+    st.info("Reading file...")
     
     try:
         # Read without headers to pick columns by dynamic search
-        df_raw = pd.read_excel(uploaded_file, header=None)
+        if uploaded_file.name.lower().endswith(".csv"):
+            df_raw = pd.read_csv(uploaded_file, header=None)
+        else:
+            df_raw = pd.read_excel(uploaded_file, header=None)
         
         # Check if file has enough rows
         if len(df_raw) < 3:
@@ -28,11 +32,12 @@ if uploaded_file is not None:
         # Dynamic Column Discovery
         header_row = [str(x).strip() for x in df_raw.iloc[1].tolist()]
 
-        def get_first_idx(col_name, start_idx=0):
+        def get_first_idx(col_name_or_list, start_idx=0):
+            col_names = col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list]
             for i in range(start_idx, len(header_row)):
-                if header_row[i] == col_name:
+                if header_row[i] in col_names:
                     return i
-            st.error(f"Error: Could not find column '{col_name}' in the Excel header.")
+            st.error(f"Error: Could not find column '{col_names}' in the Excel header.")
             st.stop()
             
         branch_idx = get_first_idx('BRANCH')
@@ -50,14 +55,17 @@ if uploaded_file is not None:
         cr_idx = get_first_idx('CR', cm_idx)
         cw_idx = get_first_idx('W', cm_idx)
         
-        tm_idx = get_first_idx('TM', cw_idx)
+        tm_idx = get_first_idx(['TM', 'Total'], cw_idx)
         tr_idx = get_first_idx('TR', tm_idx)
 
-        st.info("Filtering for branch MH-MUM-NSP-NSPIRA-CC...")
-        df_filtered = data_rows[data_rows[branch_idx] == 'MH-MUM-NSP-NSPIRA-CC'].copy()
+        # Allow user to specify branch
+        target_branch = st.text_input("Enter branch to filter by:", value="MH-MUM-NSP-NSPIRA-CC")
+
+        st.info(f"Filtering for branch {target_branch}...")
+        df_filtered = data_rows[data_rows[branch_idx] == target_branch].copy()
 
         if df_filtered.empty:
-            st.warning("No students found for branch 'MH-MUM-NSP-NSPIRA-CC'.")
+            st.warning(f"No students found for branch '{target_branch}'.")
             st.stop()
 
         req_indices = [name_idx, mm_idx, mr_idx, mw_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, tm_idx, tr_idx]
@@ -137,7 +145,8 @@ if uploaded_file is not None:
         st.dataframe(df_final.head())
         
         # Provide the download button
-        new_filename = uploaded_file.name.replace(".xlsx", "_Analyzed.xlsx").replace(".xls", "_Analyzed.xlsx")
+        base_name, _ = os.path.splitext(uploaded_file.name)
+        new_filename = f"{base_name}_Analyzed.xlsx"
         st.download_button(
             label="⬇️ Download Formatted Excel File",
             data=final_buffer,
