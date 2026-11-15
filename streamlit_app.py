@@ -15,7 +15,7 @@ if page == "Results Analyzer (Excel)":
     st.title("Student Results Analyzer 📊")
     st.write(
         "Upload your weekly JEE or NEET Excel/CSV file. "
-        "This app filters your selected branch and color-codes marks **per branch** in 20% tiers "
+        "This app filters your selected branch and color-codes **subject & total ranks per branch** in accurate 20% tiers "
         "(Top 20% = Green, 20–40% = Light Green, 40–60% = Yellow, 60–80% = Orange, Bottom 20% = Red)."
     )
 
@@ -221,7 +221,7 @@ if page == "Results Analyzer (Excel)":
                     ("TM", tm_idx, True),
                     ("TR", tr_idx, True),
                 ]
-                score_cols_to_color = ["PM", "CM", "BM", "ZM", "BIO-M", "TM"]
+                rank_cols_to_color = ["PR", "CR", "BR", "ZR", "TR"]
             else:
                 candidate_cols = [
                     ("MM", mm_idx, True),
@@ -236,7 +236,7 @@ if page == "Results Analyzer (Excel)":
                     ("TM", tm_idx, True),
                     ("TR", tr_idx, True),
                 ]
-                score_cols_to_color = ["MM", "PM", "CM", "TM"]
+                rank_cols_to_color = ["MR", "PR", "CR", "TR"]
 
             for col_label, c_idx, is_num in candidate_cols:
                 if c_idx is not None:
@@ -259,11 +259,25 @@ if page == "Results Analyzer (Excel)":
             for col in cols_to_convert:
                 df_final[col] = pd.to_numeric(df_final[col], errors="coerce")
 
-            # New per-branch 20% percentile tier color coding:
-            # Top 20% -> Green, 20-40% -> Light Green, 40-60% -> Yellow, 60-80% -> Orange, Bottom 20% -> Red
-            def get_branch_percentile_tiers(score_series, group_keys):
+            # Sort students by Total Rank (TR) best-to-worst (and by BRANCH when multiple branches are shown)
+            df_final["_branch_key"] = branch_keys
+            if "TR" in df_final.columns:
+                sort_cols = ["_branch_key", "TR"] if include_branch_col else ["TR"]
+                df_final = df_final.sort_values(by=sort_cols, ascending=True, na_position="last").reset_index(drop=True)
+            elif "TM" in df_final.columns:
+                if include_branch_col:
+                    df_final = df_final.sort_values(by=["_branch_key", "TM"], ascending=[True, False], na_position="last").reset_index(drop=True)
+                else:
+                    df_final = df_final.sort_values(by="TM", ascending=False, na_position="last").reset_index(drop=True)
+
+            branch_keys = df_final.pop("_branch_key").reset_index(drop=True)
+
+            # Midpoint per-branch rank percentile tiers (lower rank = better):
+            # Uses (average_rank - 0.5) / n so ties always share a color, multiples of 5 split evenly,
+            # and small branches (n=1, 2, 3, ...) map cleanly to Green -> Red without skipping bottom tiers.
+            def get_branch_rank_tiers(rank_series, group_keys):
                 tiers = {0: [], 1: [], 2: [], 3: [], 4: []}
-                temp = pd.DataFrame({"score": score_series, "branch": group_keys}).dropna(subset=["score"])
+                temp = pd.DataFrame({"rank_val": rank_series, "branch": group_keys}).dropna(subset=["rank_val"])
                 if temp.empty:
                     return tiers
 
@@ -271,22 +285,36 @@ if page == "Results Analyzer (Excel)":
                     n = len(grp)
                     if n == 0:
                         continue
-                    ranks = grp["score"].rank(ascending=False, method="min")
-                    top_pct = (ranks - 1.0) / float(n)
-                    for row_idx, pct_val in top_pct.items():
-                        if pct_val < 0.20:
+                    if n == 1:
+                        tiers[0].append(grp.index[0])
+                        continue
+                    if n == 2:
+                        min_val = grp["rank_val"].min()
+                        max_val = grp["rank_val"].max()
+                        if min_val == max_val:
+                            for row_idx in grp.index:
+                                tiers[0].append(row_idx)
+                        else:
+                            for row_idx, val in grp["rank_val"].items():
+                                tiers[0 if val == min_val else 4].append(row_idx)
+                        continue
+
+                    in_branch_rank = grp["rank_val"].rank(ascending=True, method="average")
+                    midpoint_pct = (in_branch_rank - 0.5) / float(n)
+                    for row_idx, pct_val in midpoint_pct.items():
+                        if pct_val <= 0.20:
                             tiers[0].append(row_idx)
-                        elif pct_val < 0.40:
+                        elif pct_val <= 0.40:
                             tiers[1].append(row_idx)
-                        elif pct_val < 0.60:
+                        elif pct_val <= 0.60:
                             tiers[2].append(row_idx)
-                        elif pct_val < 0.80:
+                        elif pct_val <= 0.80:
                             tiers[3].append(row_idx)
                         else:
                             tiers[4].append(row_idx)
                 return tiers
 
-            st.info("Calculating per-branch 20% performance tiers and coloring...")
+            st.info("Calculating accurate per-branch rank percentiles (20% tiers) and coloring...")
 
             output_buffer = io.BytesIO()
             df_final.to_excel(output_buffer, index=False)
@@ -318,14 +346,16 @@ if page == "Results Analyzer (Excel)":
                     for idx in row_indices:
                         ws.cell(row=idx + 2, column=col_idx).fill = fill
 
-            for score_col in score_cols_to_color:
-                if score_col in df_final.columns:
-                    col_tiers = get_branch_percentile_tiers(df_final[score_col], branch_keys)
-                    apply_tier_colors(ws, score_col, col_tiers)
+            rank_tiers_by_col = {}
+            for rank_col in rank_cols_to_color:
+                if rank_col in df_final.columns:
+                    col_tiers = get_branch_rank_tiers(df_final[rank_col], branch_keys)
+                    rank_tiers_by_col[rank_col] = col_tiers
+                    apply_tier_colors(ws, rank_col, col_tiers)
 
-            # Add a clean Color Legend sheet so users can reference the scheme offline
+            # Add a Color Legend & Branch Rank Cutoffs sheet for transparent review
             legend_ws = wb.create_sheet(title="Color Legend")
-            legend_ws.append(["Tier (Per Branch)", "Color"])
+            legend_ws.append(["Tier (Per Branch by Rank)", "Color", "Students (TR)" if "TR" in rank_tiers_by_col else "Method"])
             legend_rows = [
                 ("Top 20% (0% - 20%)", 0, "Green"),
                 ("Next 20% (20% - 40%)", 1, "Light Green"),
@@ -337,8 +367,32 @@ if page == "Results Analyzer (Excel)":
                 legend_ws.cell(row=r_i, column=1, value=label)
                 c = legend_ws.cell(row=r_i, column=2, value=color_name)
                 c.fill = tier_fills[t_id]
-            legend_ws.column_dimensions["A"].width = 28
-            legend_ws.column_dimensions["B"].width = 16
+                if "TR" in rank_tiers_by_col:
+                    legend_ws.cell(row=r_i, column=3, value=len(rank_tiers_by_col["TR"][t_id]))
+
+            if "TR" in rank_tiers_by_col:
+                legend_ws.append([])
+                legend_ws.append(["Branch", "Strength", "Green (Top 20%)", "Light Green (20-40%)", "Yellow (40-60%)", "Orange (60-80%)", "Red (Bottom 20%)"])
+                row_tier_map = {}
+                for t_id, idxs in rank_tiers_by_col["TR"].items():
+                    for i in idxs:
+                        row_tier_map[i] = t_id
+                df_summary = pd.DataFrame({"branch": branch_keys, "TR": df_final["TR"]})
+                df_summary["tier"] = df_summary.index.map(row_tier_map)
+                for b_name, b_grp in df_summary.dropna(subset=["TR"]).groupby("branch", sort=False):
+                    tier_ranges = []
+                    for t_id in range(5):
+                        vals = b_grp[b_grp["tier"] == t_id]["TR"]
+                        if vals.empty:
+                            tier_ranges.append("-")
+                        else:
+                            lo, hi = int(vals.min()), int(vals.max())
+                            tier_ranges.append(f"{lo}" if lo == hi else f"{lo} - {hi}")
+                    legend_ws.append([b_name, len(b_grp)] + tier_ranges)
+
+            legend_ws.column_dimensions["A"].width = 30
+            for col_let in ["B", "C", "D", "E", "F", "G"]:
+                legend_ws.column_dimensions[col_let].width = 18
 
             final_buffer = io.BytesIO()
             wb.save(final_buffer)
