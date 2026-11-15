@@ -13,217 +13,354 @@ page = st.sidebar.radio("Go to", ["Results Analyzer (Excel)", "Exam Grader (.dat
 
 if page == "Results Analyzer (Excel)":
     st.title("Student Results Analyzer 📊")
-    # Removed the word 'Aakash' as requested
-    st.write("Upload your weekly Excel file. This app will instantly filter the NSPIRA-CC branch, format the ranks (Top 33% = Green, Middle = Yellow, Bottom = Red), and give you the clean file!")
-    
+    st.write(
+        "Upload your weekly JEE or NEET Excel/CSV file. "
+        "This app filters your selected branch and color-codes marks **per branch** in 20% tiers "
+        "(Top 20% = Green, 20–40% = Light Green, 40–60% = Yellow, 60–80% = Orange, Bottom 20% = Red)."
+    )
+
     exam_type = st.radio("Select Exam Type:", ["Engineering (JEE)", "Medical (NEET)"])
     uploaded_file = st.file_uploader("Upload Student Results Excel", type=["xlsx", "xls", "csv"])
-    
+
     if uploaded_file is not None:
         st.info("Reading file...")
-        
+
         try:
             if uploaded_file.name.lower().endswith(".csv"):
-                df_raw = pd.read_csv(uploaded_file, header=None)
+                try:
+                    df_raw = pd.read_csv(uploaded_file, header=None)
+                except UnicodeDecodeError:
+                    uploaded_file.seek(0)
+                    df_raw = pd.read_csv(uploaded_file, header=None, encoding="latin1")
             else:
                 if exam_type == "Medical (NEET)":
                     try:
-                        df_raw = pd.read_excel(uploaded_file, sheet_name='EST', header=None)
+                        df_raw = pd.read_excel(uploaded_file, sheet_name="EST", header=None)
                     except Exception:
                         st.warning("Could not find 'EST' sheet. Falling back to the first sheet...")
-                        df_raw = pd.read_excel(uploaded_file, header=None)
+                        uploaded_file.seek(0)
+                        df_raw = pd.read_excel(uploaded_file, sheet_name=0, header=None)
                 else:
                     df_raw = pd.read_excel(uploaded_file, header=None)
-            
+
             if len(df_raw) < 3:
                 st.error("Error: Excel file does not contain enough rows to analyze.")
                 st.stop()
-                
+
+            # Dynamic header row detection
             header_row_idx = 1
             for idx in range(min(15, len(df_raw))):
                 row_vals = [str(x).upper().strip() for x in df_raw.iloc[idx].tolist()]
-                if 'NAME' in row_vals or 'STUDENT NAME' in row_vals or 'BRANCH' in row_vals:
+                if "NAME" in row_vals or "STUDENT NAME" in row_vals or "BRANCH" in row_vals:
                     header_row_idx = idx
                     break
-                    
-            data_rows = df_raw.iloc[header_row_idx + 1:]
+
+            data_rows = df_raw.iloc[header_row_idx + 1:].copy()
             header_row = [str(x).strip() for x in df_raw.iloc[header_row_idx].tolist()]
-    
-            def get_first_idx(col_name_or_list, start_idx=0, required=True):
-                col_names = [str(c).upper().strip() for c in (col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list])]
-                for i in range(start_idx, len(header_row)):
-                    if str(header_row[i]).upper().strip() in col_names:
+            header_upper = [h.upper().strip() for h in header_row]
+
+            def get_first_idx(col_name_or_list, start_idx=0, end_idx=None, required=True):
+                col_names = [
+                    str(c).upper().strip()
+                    for c in (col_name_or_list if isinstance(col_name_or_list, list) else [col_name_or_list])
+                ]
+                stop_at = len(header_upper) if end_idx is None else min(end_idx, len(header_upper))
+                for i in range(start_idx, stop_at):
+                    if header_upper[i] in col_names:
                         return i
                 if required:
-                    available_cols = ", ".join([str(x).strip() for x in header_row if str(x).strip() and str(x).strip().lower() != 'nan'])
-                    st.error(f"Error: Could not find column '{col_name_or_list}' in the Excel header. Available columns in detected header row: {available_cols}")
+                    available_cols = ", ".join(
+                        [h for h in header_row if h and h.lower() != "nan"]
+                    )
+                    st.error(
+                        f"Error: Could not find column '{col_name_or_list}' in the header. "
+                        f"Available columns: {available_cols}"
+                    )
                     st.stop()
                 return None
-                
-            branch_idx = get_first_idx(['BRANCH', 'CAMPUS', 'CENTRE'], required=False)
-            name_idx = get_first_idx(['NAME', 'STUDENT NAME'])
-            
-            pm_idx = get_first_idx('PM', 0)
-            pr_idx = get_first_idx('PR', pm_idx)
-            pw_idx = get_first_idx('W', pm_idx)
-            
-            cm_idx = get_first_idx('CM', 0)
-            cr_idx = get_first_idx('CR', cm_idx)
-            cw_idx = get_first_idx('W', cm_idx)
-            
+
+            branch_idx = get_first_idx(["BRANCH", "CAMPUS", "CENTRE", "CENTER"], required=False)
+            name_idx = get_first_idx(["NAME", "STUDENT NAME", "STUDENT_NAME"])
+
+            pm_idx = get_first_idx("PM", 0)
+            cm_idx = get_first_idx("CM", 0)
+            tm_idx = get_first_idx(["TM", "TOTAL", "TOTAL MARKS"], 0)
+
             if exam_type == "Medical (NEET)":
-                bm_idx = get_first_idx('BM', 0)
-                br_idx = get_first_idx('BR', bm_idx)
-                bw_idx = get_first_idx('W', bm_idx)
-                
-                zm_idx = get_first_idx('ZM', 0)
-                zr_idx = get_first_idx('ZR', zm_idx)
-                zw_idx = get_first_idx('W', zm_idx)
+                bm_idx = get_first_idx("BM", 0)
+                zm_idx = get_first_idx("ZM", 0)
+                bio_m_idx = get_first_idx(["BIO-M", "BIOM", "BIOLOGY", "BIO"], 0, required=False)
+
+                subj_starts = sorted([i for i in [pm_idx, cm_idx, bm_idx, zm_idx, bio_m_idx, tm_idx] if i is not None])
+                def next_boundary(idx):
+                    for s in subj_starts:
+                        if s > idx:
+                            return s
+                    return len(header_upper)
+
+                pr_idx = get_first_idx("PR", pm_idx, next_boundary(pm_idx), required=False)
+                pw_idx = get_first_idx("W", pm_idx, next_boundary(pm_idx), required=False)
+
+                cr_idx = get_first_idx("CR", cm_idx, next_boundary(cm_idx), required=False)
+                cw_idx = get_first_idx("W", cm_idx, next_boundary(cm_idx), required=False)
+
+                br_idx = get_first_idx("BR", bm_idx, next_boundary(bm_idx), required=False)
+                bw_idx = get_first_idx("W", bm_idx, next_boundary(bm_idx), required=False)
+
+                zr_idx = get_first_idx("ZR", zm_idx, next_boundary(zm_idx), required=False)
+                zw_idx = get_first_idx("W", zm_idx, next_boundary(zm_idx), required=False)
+
+                tr_idx = get_first_idx("TR", tm_idx, len(header_upper), required=False)
             else:
-                mm_idx = get_first_idx('MM', 0)
-                mr_idx = get_first_idx('MR', mm_idx)
-                mw_idx = get_first_idx('W', mm_idx)
-                
-            tm_idx = get_first_idx(['TM', 'Total'], 0)
-            tr_idx = get_first_idx('TR', tm_idx)
-    
+                mm_idx = get_first_idx("MM", 0)
+                subj_starts = sorted([i for i in [mm_idx, pm_idx, cm_idx, tm_idx] if i is not None])
+                def next_boundary(idx):
+                    for s in subj_starts:
+                        if s > idx:
+                            return s
+                    return len(header_upper)
+
+                mr_idx = get_first_idx("MR", mm_idx, next_boundary(mm_idx), required=False)
+                mw_idx = get_first_idx("W", mm_idx, next_boundary(mm_idx), required=False)
+
+                pr_idx = get_first_idx("PR", pm_idx, next_boundary(pm_idx), required=False)
+                pw_idx = get_first_idx("W", pm_idx, next_boundary(pm_idx), required=False)
+
+                cr_idx = get_first_idx("CR", cm_idx, next_boundary(cm_idx), required=False)
+                cw_idx = get_first_idx("W", cm_idx, next_boundary(cm_idx), required=False)
+
+                tr_idx = get_first_idx("TR", tm_idx, len(header_upper), required=False)
+
+            # Remove footer summary blocks (e.g., MARKS SUMMARY / ZONE SUMMARY) and empty/header rows
+            summary_markers = ("MARKS SUMMARY", "ZONE SUMMARY")
+            first_summary_pos = None
+            for pos_idx, (_, row_series) in enumerate(data_rows.iterrows()):
+                row_text = " ".join(str(v).upper().strip() for v in row_series.tolist() if pd.notna(v))
+                if any(marker in row_text for marker in summary_markers):
+                    first_summary_pos = pos_idx
+                    break
+            if first_summary_pos is not None:
+                data_rows = data_rows.iloc[:first_summary_pos].copy()
+
+            data_rows = data_rows.copy()
+            name_clean = data_rows.iloc[:, name_idx].astype(str).str.strip()
+            invalid_names = {"", "NAN", "NONE", "NAME", "STUDENT NAME", "MARKS SUMMARY", "ZONE SUMMARY", "STRENGTH", "TOTAL"}
+            valid_name_mask = data_rows.iloc[:, name_idx].notna() & (~name_clean.str.upper().isin(invalid_names))
+            data_rows = data_rows[valid_name_mask].copy()
+
             if branch_idx is not None:
-                all_branches = data_rows[branch_idx].dropna().unique().tolist()
-                mh_mum_branches = [str(b) for b in all_branches if str(b).startswith("MH-MUM")]
-                
-                branch_options = mh_mum_branches if mh_mum_branches else [str(b) for b in all_branches]
-                
-                if not branch_options:
+                data_rows.iloc[:, branch_idx] = data_rows.iloc[:, branch_idx].apply(
+                    lambda v: str(v).strip() if pd.notna(v) and str(v).strip().lower() != "nan" else None
+                )
+
+            include_branch_col = False
+            if branch_idx is not None:
+                all_branches = sorted([b for b in data_rows.iloc[:, branch_idx].dropna().unique().tolist() if b])
+                mh_mum_branches = [b for b in all_branches if b.startswith("MH-MUM")]
+                if "MH-MUM-NSP-NSPIRA-CC" in mh_mum_branches:
+                    mh_mum_branches.remove("MH-MUM-NSP-NSPIRA-CC")
+                    mh_mum_branches.insert(0, "MH-MUM-NSP-NSPIRA-CC")
+
+                show_all_branches_list = st.checkbox("Show all branches in dropdown (not just MH-MUM)", value=False)
+                if show_all_branches_list or not mh_mum_branches:
+                    base_branches = all_branches
+                else:
+                    base_branches = mh_mum_branches
+
+                if not base_branches:
                     st.warning("No branches were found in the uploaded file. Showing all students.")
                     df_filtered = data_rows.copy()
                 else:
+                    special_opts = []
+                    if mh_mum_branches and not show_all_branches_list:
+                        special_opts.append("All MH-MUM Branches (Color-coded per branch)")
+                    special_opts.append("All Branches (Color-coded per branch)")
+
+                    branch_options = base_branches + special_opts
                     target_branch = st.selectbox("Select branch to filter by:", options=branch_options)
-                    st.info(f"Filtering for branch {target_branch}...")
-                    df_filtered = data_rows[data_rows[branch_idx] == target_branch].copy()
+
+                    if target_branch == "All MH-MUM Branches (Color-coded per branch)":
+                        st.info("Showing all MH-MUM branches (color-coded per branch)...")
+                        df_filtered = data_rows[data_rows.iloc[:, branch_idx].isin(mh_mum_branches)].copy()
+                        include_branch_col = True
+                    elif target_branch == "All Branches (Color-coded per branch)":
+                        st.info("Showing all branches (color-coded per branch)...")
+                        df_filtered = data_rows.copy()
+                        include_branch_col = True
+                    else:
+                        st.info(f"Filtering for branch {target_branch}...")
+                        df_filtered = data_rows[data_rows.iloc[:, branch_idx] == target_branch].copy()
+
                     if df_filtered.empty:
-                        st.warning(f"No students found for branch '{target_branch}'.")
+                        st.warning(f"No students found for selection '{target_branch}'.")
                         st.stop()
             else:
                 st.info("No BRANCH column found. Showing all students.")
                 df_filtered = data_rows.copy()
-    
+
+            # Build output columns dynamically based on columns present in the file
+            col_spec = [("NAME", name_idx, False)]
+            if include_branch_col and branch_idx is not None:
+                col_spec.append(("BRANCH", branch_idx, False))
+
             if exam_type == "Medical (NEET)":
-                req_indices = [name_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, bm_idx, br_idx, bw_idx, zm_idx, zr_idx, zw_idx, tm_idx, tr_idx]
-                df_final = df_filtered.iloc[:, req_indices].copy()
-                df_final.columns = ['NAME', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'BM', 'BR', 'Botany W', 'ZM', 'ZR', 'Zoology W', 'TM', 'TR']
-                cols_to_convert = ['PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'BM', 'BR', 'Botany W', 'ZM', 'ZR', 'Zoology W', 'TM', 'TR']
+                candidate_cols = [
+                    ("PM", pm_idx, True),
+                    ("PR", pr_idx, True),
+                    ("Physics W", pw_idx, True),
+                    ("CM", cm_idx, True),
+                    ("CR", cr_idx, True),
+                    ("Chemistry W", cw_idx, True),
+                    ("BM", bm_idx, True),
+                    ("BR", br_idx, True),
+                    ("Botany W", bw_idx, True),
+                    ("ZM", zm_idx, True),
+                    ("ZR", zr_idx, True),
+                    ("Zoology W", zw_idx, True),
+                    ("BIO-M", bio_m_idx, True),
+                    ("TM", tm_idx, True),
+                    ("TR", tr_idx, True),
+                ]
+                score_cols_to_color = ["PM", "CM", "BM", "ZM", "BIO-M", "TM"]
             else:
-                req_indices = [name_idx, mm_idx, mr_idx, mw_idx, pm_idx, pr_idx, pw_idx, cm_idx, cr_idx, cw_idx, tm_idx, tr_idx]
-                df_final = df_filtered.iloc[:, req_indices].copy()
-                df_final.columns = ['NAME', 'MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
-                cols_to_convert = ['MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
-    
-            df_final = df_final.reset_index(drop=True)
-    
-            for col in cols_to_convert:
-                df_final[col] = pd.to_numeric(df_final[col], errors='coerce')
-    
-            def get_tertiles_marks(local_series, global_series):
-                s_local = local_series.dropna()
-                s_global = global_series.dropna()
-                
-                if len(s_local) == 0 or len(s_global) == 0: 
-                    return [], [], []
-                    
-                try:
-                    p33 = s_global.quantile(0.33)
-                    p66 = s_global.quantile(0.66)
-                    
-                    worst_indices = s_local[s_local < p33].index.tolist()
-                    avg_indices = s_local[(s_local >= p33) & (s_local < p66)].index.tolist()
-                    best_indices = s_local[s_local >= p66].index.tolist()
-                except:
-                    return [], [], []
-                    
-                return best_indices, worst_indices, avg_indices
-    
+                candidate_cols = [
+                    ("MM", mm_idx, True),
+                    ("MR", mr_idx, True),
+                    ("Math W", mw_idx, True),
+                    ("PM", pm_idx, True),
+                    ("PR", pr_idx, True),
+                    ("Physics W", pw_idx, True),
+                    ("CM", cm_idx, True),
+                    ("CR", cr_idx, True),
+                    ("Chemistry W", cw_idx, True),
+                    ("TM", tm_idx, True),
+                    ("TR", tr_idx, True),
+                ]
+                score_cols_to_color = ["MM", "PM", "CM", "TM"]
+
+            for col_label, c_idx, is_num in candidate_cols:
+                if c_idx is not None:
+                    col_spec.append((col_label, c_idx, is_num))
+
+            req_indices = [item[1] for item in col_spec]
+            out_col_names = [item[0] for item in col_spec]
+            cols_to_convert = [item[0] for item in col_spec if item[2]]
+
+            # Track branch key per row even when BRANCH column isn't exported
             if branch_idx is not None:
-                is_co_branch = data_rows[branch_idx].astype(str).str.upper().str.contains('CO')
-                data_rows_global = data_rows[~is_co_branch].copy()
+                branch_keys = df_filtered.iloc[:, branch_idx].fillna("UNKNOWN").astype(str).reset_index(drop=True)
             else:
-                data_rows_global = data_rows.copy()
-                
-            if exam_type == "Medical (NEET)":
-                df_global = data_rows_global.iloc[:, req_indices].copy()
-                df_global.columns = ['NAME', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'BM', 'BR', 'Botany W', 'ZM', 'ZR', 'Zoology W', 'TM', 'TR']
-            else:
-                df_global = data_rows_global.iloc[:, req_indices].copy()
-                df_global.columns = ['NAME', 'MM', 'MR', 'Math W', 'PM', 'PR', 'Physics W', 'CM', 'CR', 'Chemistry W', 'TM', 'TR']
-    
+                branch_keys = pd.Series(["ALL"] * len(df_filtered))
+
+            df_final = df_filtered.iloc[:, req_indices].copy()
+            df_final.columns = out_col_names
+            df_final = df_final.reset_index(drop=True)
+
             for col in cols_to_convert:
-                df_global[col] = pd.to_numeric(df_global[col], errors='coerce')
-                
-            df_top500 = df_global.sort_values(by='TM', ascending=False).head(500)
-    
-            st.info("Calculating percentiles based on top 500 non-CO students' marks and coloring...")
-            best_p, worst_p, avg_p = get_tertiles_marks(df_final['PM'], df_top500['PM'])
-            best_c, worst_c, avg_c = get_tertiles_marks(df_final['CM'], df_top500['CM'])
-            best_t, worst_t, avg_t = get_tertiles_marks(df_final['TM'], df_top500['TM'])
-    
-            if exam_type == "Medical (NEET)":
-                best_b, worst_b, avg_b = get_tertiles_marks(df_final['BM'], df_top500['BM'])
-                best_z, worst_z, avg_z = get_tertiles_marks(df_final['ZM'], df_top500['ZM'])
-            else:
-                best_m, worst_m, avg_m = get_tertiles_marks(df_final['MM'], df_top500['MM'])
-    
+                df_final[col] = pd.to_numeric(df_final[col], errors="coerce")
+
+            # New per-branch 20% percentile tier color coding:
+            # Top 20% -> Green, 20-40% -> Light Green, 40-60% -> Yellow, 60-80% -> Orange, Bottom 20% -> Red
+            def get_branch_percentile_tiers(score_series, group_keys):
+                tiers = {0: [], 1: [], 2: [], 3: [], 4: []}
+                temp = pd.DataFrame({"score": score_series, "branch": group_keys}).dropna(subset=["score"])
+                if temp.empty:
+                    return tiers
+
+                for _, grp in temp.groupby("branch", sort=False):
+                    n = len(grp)
+                    if n == 0:
+                        continue
+                    ranks = grp["score"].rank(ascending=False, method="min")
+                    top_pct = (ranks - 1.0) / float(n)
+                    for row_idx, pct_val in top_pct.items():
+                        if pct_val < 0.20:
+                            tiers[0].append(row_idx)
+                        elif pct_val < 0.40:
+                            tiers[1].append(row_idx)
+                        elif pct_val < 0.60:
+                            tiers[2].append(row_idx)
+                        elif pct_val < 0.80:
+                            tiers[3].append(row_idx)
+                        else:
+                            tiers[4].append(row_idx)
+                return tiers
+
+            st.info("Calculating per-branch 20% performance tiers and coloring...")
+
             output_buffer = io.BytesIO()
             df_final.to_excel(output_buffer, index=False)
             output_buffer.seek(0)
-            
+
             wb = openpyxl.load_workbook(output_buffer)
             ws = wb.active
-    
-            ws.column_dimensions['A'].width = 25
-    
-            green_fill = PatternFill(start_color="00FF00", end_color="00FF00", fill_type="solid")
-            yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-            red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-    
-            def apply_color(ws, col_name, best_indices, worst_indices, avg_indices):
+
+            ws.column_dimensions["A"].width = 28
+
+            tier_fills = {
+                0: PatternFill(start_color="00FF00", end_color="00FF00", fill_type="solid"),  # Top 20%: Green
+                1: PatternFill(start_color="CCFF99", end_color="CCFF99", fill_type="solid"),  # 20-40%: Light Green
+                2: PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid"),  # 40-60%: Yellow
+                3: PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid"),  # 60-80%: Orange
+                4: PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid"),  # Bottom 20%: Red
+            }
+
+            def apply_tier_colors(ws, col_name, tiers_dict):
                 col_idx = None
                 for cell in ws[1]:
                     if cell.value == col_name:
                         col_idx = cell.column
                         break
-                if not col_idx: return
-                
-                for idx in best_indices: ws.cell(row=idx+2, column=col_idx).fill = green_fill
-                for idx in avg_indices: ws.cell(row=idx+2, column=col_idx).fill = yellow_fill
-                for idx in worst_indices: ws.cell(row=idx+2, column=col_idx).fill = red_fill
-    
-            apply_color(ws, 'PM', best_p, worst_p, avg_p)
-            apply_color(ws, 'CM', best_c, worst_c, avg_c)
-            apply_color(ws, 'TM', best_t, worst_t, avg_t)
-    
-            if exam_type == "Medical (NEET)":
-                apply_color(ws, 'BM', best_b, worst_b, avg_b)
-                apply_color(ws, 'ZM', best_z, worst_z, avg_z)
-            else:
-                apply_color(ws, 'MM', best_m, worst_m, avg_m)
-    
+                if not col_idx:
+                    return
+                for tier_id, row_indices in tiers_dict.items():
+                    fill = tier_fills[tier_id]
+                    for idx in row_indices:
+                        ws.cell(row=idx + 2, column=col_idx).fill = fill
+
+            for score_col in score_cols_to_color:
+                if score_col in df_final.columns:
+                    col_tiers = get_branch_percentile_tiers(df_final[score_col], branch_keys)
+                    apply_tier_colors(ws, score_col, col_tiers)
+
+            # Add a clean Color Legend sheet so users can reference the scheme offline
+            legend_ws = wb.create_sheet(title="Color Legend")
+            legend_ws.append(["Tier (Per Branch)", "Color"])
+            legend_rows = [
+                ("Top 20% (0% - 20%)", 0, "Green"),
+                ("Next 20% (20% - 40%)", 1, "Light Green"),
+                ("Middle 20% (40% - 60%)", 2, "Yellow"),
+                ("Next 20% (60% - 80%)", 3, "Orange"),
+                ("Bottom 20% (80% - 100%)", 4, "Red"),
+            ]
+            for r_i, (label, t_id, color_name) in enumerate(legend_rows, start=2):
+                legend_ws.cell(row=r_i, column=1, value=label)
+                c = legend_ws.cell(row=r_i, column=2, value=color_name)
+                c.fill = tier_fills[t_id]
+            legend_ws.column_dimensions["A"].width = 28
+            legend_ws.column_dimensions["B"].width = 16
+
             final_buffer = io.BytesIO()
             wb.save(final_buffer)
             final_buffer.seek(0)
-            
-            st.success("Analysis Complete! Your file is ready to download.")
-            
-            st.write("### Data Preview (First 5 Rows)")
-            st.dataframe(df_final.head())
-            
+
+            st.success(f"Analysis Complete! Processed {len(df_final)} student(s).")
+            st.caption(
+                "**Per-Branch Color Key:** 🟩 Green = Top 20% | 🟢 Light Green = 20–40% | 🟨 Yellow = 40–60% | 🟧 Orange = 60–80% | 🟥 Red = Bottom 20%"
+            )
+
+            st.write("### Data Preview (First 10 Rows)")
+            st.dataframe(df_final.head(10))
+
             base_name, _ = os.path.splitext(uploaded_file.name)
             new_filename = f"{base_name}_Analyzed.xlsx"
             st.download_button(
                 label="⬇️ Download Formatted Excel File",
                 data=final_buffer,
                 file_name=new_filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-    
+
         except Exception as e:
             st.error(f"An error occurred while processing the file: {e}")
 
