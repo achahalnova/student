@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import openpyxl
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 import io
 import os
 
@@ -80,18 +81,37 @@ if page == "Results Analyzer (Excel)":
                 return None
 
             branch_idx = get_first_idx(["BRANCH", "CAMPUS", "CENTRE", "CENTER"], required=False)
+            admno_idx = get_first_idx(["ADMNO", "ADM NO", "ADMISSION NO", "ROLL NO"], required=False)
+            type_idx = get_first_idx(["TYPE", "A/R"], required=False)
+            type_header_label = header_row[type_idx] if type_idx is not None else "TYPE"
             name_idx = get_first_idx(["NAME", "STUDENT NAME", "STUDENT_NAME"])
+
+            # Extract Row 0 banner text if present above the header row
+            base_file_title, _ = os.path.splitext(uploaded_file.name)
+            banner_left_text = f"{exam_type} - Results Analysis"
+            banner_right_text = base_file_title
+            if header_row_idx >= 1:
+                top_row_vals = [
+                    str(v).strip()
+                    for v in df_raw.iloc[0].tolist()
+                    if pd.notna(v) and str(v).strip() and str(v).strip().lower() != "nan"
+                ]
+                if len(top_row_vals) >= 1:
+                    banner_left_text = top_row_vals[0]
+                if len(top_row_vals) >= 2:
+                    banner_right_text = top_row_vals[1]
 
             pm_idx = get_first_idx("PM", 0)
             cm_idx = get_first_idx("CM", 0)
             tm_idx = get_first_idx(["TM", "TOTAL", "TOTAL MARKS"], 0)
 
             if exam_type == "Medical (NEET)":
+                pc_idx = get_first_idx(["P+C", "PC"], 0, required=False)
                 bm_idx = get_first_idx("BM", 0)
                 zm_idx = get_first_idx("ZM", 0)
                 bio_m_idx = get_first_idx(["BIO-M", "BIOM", "BIOLOGY", "BIO"], 0, required=False)
 
-                subj_starts = sorted([i for i in [pm_idx, cm_idx, bm_idx, zm_idx, bio_m_idx, tm_idx] if i is not None])
+                subj_starts = sorted([i for i in [pm_idx, cm_idx, pc_idx, bm_idx, zm_idx, bio_m_idx, tm_idx] if i is not None])
                 def next_boundary(idx):
                     for s in subj_starts:
                         if s > idx:
@@ -198,55 +218,64 @@ if page == "Results Analyzer (Excel)":
                 st.info("No BRANCH column found. Showing all students.")
                 df_filtered = data_rows.copy()
 
-            # Build output columns dynamically based on columns present in the file
-            col_spec = [("NAME", name_idx, False)]
-            if include_branch_col and branch_idx is not None:
-                col_spec.append(("BRANCH", branch_idx, False))
+            # Build output columns dynamically: Info cols first, then Subject Marks/Ranks/W
+            info_spec = []
+            if admno_idx is not None:
+                info_spec.append(("ADMNO", admno_idx, False, "ADMNO"))
+            if type_idx is not None:
+                info_spec.append((type_header_label, type_idx, False, type_header_label))
+            info_spec.append(("NAME", name_idx, False, "NAME"))
+            if branch_idx is not None:
+                info_spec.append(("BRANCH", branch_idx, False, "BRANCH"))
 
             if exam_type == "Medical (NEET)":
                 candidate_cols = [
-                    ("PM", pm_idx, True),
-                    ("PR", pr_idx, True),
-                    ("Physics W", pw_idx, True),
-                    ("CM", cm_idx, True),
-                    ("CR", cr_idx, True),
-                    ("Chemistry W", cw_idx, True),
-                    ("BM", bm_idx, True),
-                    ("BR", br_idx, True),
-                    ("Botany W", bw_idx, True),
-                    ("ZM", zm_idx, True),
-                    ("ZR", zr_idx, True),
-                    ("Zoology W", zw_idx, True),
-                    ("BIO-M", bio_m_idx, True),
-                    ("TM", tm_idx, True),
-                    ("TR", tr_idx, True),
+                    ("PM", pm_idx, True, "PM"),
+                    ("PR", pr_idx, True, "PR"),
+                    ("Physics W", pw_idx, True, "W"),
+                    ("CM", cm_idx, True, "CM"),
+                    ("CR", cr_idx, True, "CR"),
+                    ("Chemistry W", cw_idx, True, "W"),
+                    ("P+C", pc_idx, True, "P+C"),
+                    ("BM", bm_idx, True, "BM"),
+                    ("BR", br_idx, True, "BR"),
+                    ("Botany W", bw_idx, True, "W"),
+                    ("ZM", zm_idx, True, "ZM"),
+                    ("ZR", zr_idx, True, "ZR"),
+                    ("Zoology W", zw_idx, True, "W"),
+                    ("BIO-M", bio_m_idx, True, "BIO-M"),
+                    ("TM", tm_idx, True, "TM"),
+                    ("TR", tr_idx, True, "TR"),
                 ]
                 rank_cols_to_color = ["PR", "CR", "BR", "ZR", "TR"]
             else:
                 candidate_cols = [
-                    ("MM", mm_idx, True),
-                    ("MR", mr_idx, True),
-                    ("Math W", mw_idx, True),
-                    ("PM", pm_idx, True),
-                    ("PR", pr_idx, True),
-                    ("Physics W", pw_idx, True),
-                    ("CM", cm_idx, True),
-                    ("CR", cr_idx, True),
-                    ("Chemistry W", cw_idx, True),
-                    ("TM", tm_idx, True),
-                    ("TR", tr_idx, True),
+                    ("MM", mm_idx, True, "MM"),
+                    ("MR", mr_idx, True, "MR"),
+                    ("Math W", mw_idx, True, "W"),
+                    ("PM", pm_idx, True, "PM"),
+                    ("PR", pr_idx, True, "PR"),
+                    ("Physics W", pw_idx, True, "W"),
+                    ("CM", cm_idx, True, "CM"),
+                    ("CR", cr_idx, True, "CR"),
+                    ("Chemistry W", cw_idx, True, "W"),
+                    ("TM", tm_idx, True, "TM"),
+                    ("TR", tr_idx, True, "TR"),
                 ]
                 rank_cols_to_color = ["MR", "PR", "CR", "TR"]
 
-            for col_label, c_idx, is_num in candidate_cols:
+            col_spec = list(info_spec)
+            for col_label, c_idx, is_num, excel_hdr in candidate_cols:
                 if c_idx is not None:
-                    col_spec.append((col_label, c_idx, is_num))
+                    col_spec.append((col_label, c_idx, is_num, excel_hdr))
 
             req_indices = [item[1] for item in col_spec]
             out_col_names = [item[0] for item in col_spec]
             cols_to_convert = [item[0] for item in col_spec if item[2]]
+            excel_display_headers = ["Sl.No"] + [item[3] for item in col_spec]
+            num_info_cols = 1 + len(info_spec)  # Includes generated Sl.No
 
-            # Track branch key per row even when BRANCH column isn't exported
+            # Track branch key per row even when filtering to a single branch
             if branch_idx is not None:
                 branch_keys = df_filtered.iloc[:, branch_idx].fillna("UNKNOWN").astype(str).reset_index(drop=True)
             else:
@@ -271,6 +300,7 @@ if page == "Results Analyzer (Excel)":
                     df_final = df_final.sort_values(by="TM", ascending=False, na_position="last").reset_index(drop=True)
 
             branch_keys = df_final.pop("_branch_key").reset_index(drop=True)
+            df_final.insert(0, "Sl.No", range(1, len(df_final) + 1))
 
             # Midpoint per-branch rank percentile tiers (lower rank = better):
             # Uses (average_rank - 0.5) / n so ties always share a color, multiples of 5 split evenly,
@@ -314,48 +344,170 @@ if page == "Results Analyzer (Excel)":
                             tiers[4].append(row_idx)
                 return tiers
 
-            st.info("Calculating accurate per-branch rank percentiles (20% tiers) and coloring...")
+            st.info("Calculating accurate per-branch rank percentiles (20% tiers) and building formatted Excel...")
 
-            output_buffer = io.BytesIO()
-            df_final.to_excel(output_buffer, index=False)
-            output_buffer.seek(0)
-
-            wb = openpyxl.load_workbook(output_buffer)
+            # Build styled Excel workbook matching the two-row executive banner & header layout
+            wb = openpyxl.Workbook()
             ws = wb.active
+            ws.title = "EST" if exam_type == "Medical (NEET)" else "Results"
 
-            ws.column_dimensions["A"].width = 28
+            total_cols = len(excel_display_headers)
+            total_rows = 2 + len(df_final)
 
+            # Styling definitions
+            thin_gray = Side(border_style="thin", color="BFBFBF")
+            med_navy = Side(border_style="medium", color="1F4E78")
+            cell_border = Border(left=thin_gray, right=thin_gray, top=thin_gray, bottom=thin_gray)
+            header_border = Border(left=thin_gray, right=thin_gray, top=thin_gray, bottom=med_navy)
+
+            banner_left_fill = PatternFill(start_color="963634", end_color="963634", fill_type="solid")
+            banner_right_fill = PatternFill(start_color="215967", end_color="215967", fill_type="solid")
+            banner_left_font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+            banner_right_font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+
+            info_hdr_fill = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+            info_hdr_font = Font(name="Calibri", size=11, bold=True, color="000000")
+
+            subj_hdr_fill = PatternFill(start_color="F2F6FC", end_color="F2F6FC", fill_type="solid")
+            subj_hdr_font = Font(name="Calibri", size=11, bold=True, color="003399")
+
+            w_hdr_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+            w_hdr_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+
+            bio_hdr_fill = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+            bio_hdr_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+
+            data_font = Font(name="Calibri", size=11, bold=False, color="000000")
+            tm_font = Font(name="Calibri", size=11, bold=True, color="000099")
+            bold_data_font = Font(name="Calibri", size=11, bold=True, color="000000")
+
+            center_align = Alignment(horizontal="center", vertical="center")
+            left_align = Alignment(horizontal="left", vertical="center")
+
+            # Row 1: Two-section merged banner
+            ws.row_dimensions[1].height = 24
+            ws.cell(row=1, column=1, value=banner_left_text)
+            if num_info_cols > 1:
+                ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=num_info_cols)
+            for c_i in range(1, num_info_cols + 1):
+                c = ws.cell(row=1, column=c_i)
+                c.fill = banner_left_fill
+                c.font = banner_left_font
+                c.alignment = center_align
+                c.border = cell_border
+
+            if total_cols > num_info_cols:
+                ws.cell(row=1, column=num_info_cols + 1, value=banner_right_text)
+                if total_cols > num_info_cols + 1:
+                    ws.merge_cells(start_row=1, start_column=num_info_cols + 1, end_row=1, end_column=total_cols)
+                for c_i in range(num_info_cols + 1, total_cols + 1):
+                    c = ws.cell(row=1, column=c_i)
+                    c.fill = banner_right_fill
+                    c.font = banner_right_font
+                    c.alignment = center_align
+                    c.border = cell_border
+
+            # Row 2: Styled Column Headers
+            ws.row_dimensions[2].height = 26
+            for c_i, hdr_label in enumerate(excel_display_headers, start=1):
+                cell = ws.cell(row=2, column=c_i, value=hdr_label)
+                cell.border = header_border
+                if c_i <= num_info_cols:
+                    cell.fill = info_hdr_fill
+                    cell.font = info_hdr_font
+                    cell.alignment = left_align if hdr_label in ("NAME", "BRANCH") else center_align
+                elif hdr_label == "W":
+                    cell.fill = w_hdr_fill
+                    cell.font = w_hdr_font
+                    cell.alignment = center_align
+                elif hdr_label == "BIO-M":
+                    cell.fill = bio_hdr_fill
+                    cell.font = bio_hdr_font
+                    cell.alignment = center_align
+                else:
+                    cell.fill = subj_hdr_fill
+                    cell.font = subj_hdr_font
+                    cell.alignment = center_align
+
+            # Row 3+: Student Data
+            col_names_list = df_final.columns.tolist()
+            for r_idx, row_vals in enumerate(df_final.itertuples(index=False, name=None), start=3):
+                ws.row_dimensions[r_idx].height = 19
+                for c_i, (col_key, val) in enumerate(zip(col_names_list, row_vals), start=1):
+                    if pd.isna(val):
+                        clean_val = None
+                    elif isinstance(val, float) and val.is_integer():
+                        clean_val = int(val)
+                    else:
+                        clean_val = val
+                    cell = ws.cell(row=r_idx, column=c_i, value=clean_val)
+                    cell.border = cell_border
+                    if col_key in ("NAME", "BRANCH"):
+                        cell.alignment = left_align
+                        cell.font = data_font
+                    elif col_key == "TM":
+                        cell.alignment = center_align
+                        cell.font = tm_font
+                    elif col_key in ("TR", "P+C", "BIO-M"):
+                        cell.alignment = center_align
+                        cell.font = bold_data_font
+                    else:
+                        cell.alignment = center_align
+                        cell.font = data_font
+
+            # Rank column 20% percentile tier colors
             tier_fills = {
-                0: PatternFill(start_color="00FF00", end_color="00FF00", fill_type="solid"),  # Top 20%: Green
-                1: PatternFill(start_color="CCFF99", end_color="CCFF99", fill_type="solid"),  # 20-40%: Light Green
+                0: PatternFill(start_color="92D050", end_color="92D050", fill_type="solid"),  # Top 20%: Green
+                1: PatternFill(start_color="D8F5A2", end_color="D8F5A2", fill_type="solid"),  # 20-40%: Light Green
                 2: PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid"),  # 40-60%: Yellow
-                3: PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid"),  # 60-80%: Orange
+                3: PatternFill(start_color="FFC000", end_color="FFC000", fill_type="solid"),  # 60-80%: Orange
                 4: PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid"),  # Bottom 20%: Red
             }
 
-            def apply_tier_colors(ws, col_name, tiers_dict):
-                col_idx = None
-                for cell in ws[1]:
-                    if cell.value == col_name:
-                        col_idx = cell.column
-                        break
-                if not col_idx:
-                    return
-                for tier_id, row_indices in tiers_dict.items():
-                    fill = tier_fills[tier_id]
-                    for idx in row_indices:
-                        ws.cell(row=idx + 2, column=col_idx).fill = fill
-
+            col_index_map = {col_name: i + 1 for i, col_name in enumerate(col_names_list)}
             rank_tiers_by_col = {}
             for rank_col in rank_cols_to_color:
-                if rank_col in df_final.columns:
+                if rank_col in col_index_map:
+                    c_idx = col_index_map[rank_col]
                     col_tiers = get_branch_rank_tiers(df_final[rank_col], branch_keys)
                     rank_tiers_by_col[rank_col] = col_tiers
-                    apply_tier_colors(ws, rank_col, col_tiers)
+                    for tier_id, row_indices in col_tiers.items():
+                        fill = tier_fills[tier_id]
+                        for idx in row_indices:
+                            ws.cell(row=idx + 3, column=c_idx).fill = fill
+
+            # Auto-fit all columns with padding to prevent ### truncation
+            for c_i, (col_key, disp_hdr) in enumerate(zip(col_names_list, excel_display_headers), start=1):
+                max_len = len(str(disp_hdr))
+                for val in df_final[col_key]:
+                    if pd.notna(val):
+                        v_str = str(int(val)) if isinstance(val, float) and val.is_integer() else str(val)
+                        if len(v_str) > max_len:
+                            max_len = len(v_str)
+                col_letter = get_column_letter(c_i)
+                if col_key == "NAME":
+                    ws.column_dimensions[col_letter].width = max(24, min(max_len + 4, 38))
+                elif col_key == "BRANCH":
+                    ws.column_dimensions[col_letter].width = max(24, min(max_len + 4, 34))
+                else:
+                    ws.column_dimensions[col_letter].width = max(8, max_len + 4)
+
+            # Enable AutoFilter on Row 2 headers & Freeze Panes below Row 2 / after Info columns
+            last_col_letter = get_column_letter(total_cols)
+            ws.auto_filter.ref = f"A2:{last_col_letter}{total_rows}"
+            freeze_col_letter = get_column_letter(min(num_info_cols + 1, total_cols))
+            ws.freeze_panes = f"{freeze_col_letter}3"
 
             # Add a Color Legend & Branch Rank Cutoffs sheet for transparent review
             legend_ws = wb.create_sheet(title="Color Legend")
-            legend_ws.append(["Tier (Per Branch by Rank)", "Color", "Students (TR)" if "TR" in rank_tiers_by_col else "Method"])
+            legend_ws.append(["Tier (Per Branch by Rank)", "Color", "Students (TR)" if "TR" in rank_tiers_by_col else "Count"])
+            for h_c in range(1, 4):
+                hc = legend_ws.cell(row=1, column=h_c)
+                hc.fill = info_hdr_fill
+                hc.font = info_hdr_font
+                hc.alignment = center_align
+                hc.border = header_border
+
             legend_rows = [
                 ("Top 20% (0% - 20%)", 0, "Green"),
                 ("Next 20% (20% - 40%)", 1, "Light Green"),
@@ -364,15 +516,28 @@ if page == "Results Analyzer (Excel)":
                 ("Bottom 20% (80% - 100%)", 4, "Red"),
             ]
             for r_i, (label, t_id, color_name) in enumerate(legend_rows, start=2):
-                legend_ws.cell(row=r_i, column=1, value=label)
-                c = legend_ws.cell(row=r_i, column=2, value=color_name)
-                c.fill = tier_fills[t_id]
+                c1 = legend_ws.cell(row=r_i, column=1, value=label)
+                c1.border = cell_border
+                c2 = legend_ws.cell(row=r_i, column=2, value=color_name)
+                c2.fill = tier_fills[t_id]
+                c2.alignment = center_align
+                c2.border = cell_border
                 if "TR" in rank_tiers_by_col:
-                    legend_ws.cell(row=r_i, column=3, value=len(rank_tiers_by_col["TR"][t_id]))
+                    c3 = legend_ws.cell(row=r_i, column=3, value=len(rank_tiers_by_col["TR"][t_id]))
+                    c3.alignment = center_align
+                    c3.border = cell_border
 
             if "TR" in rank_tiers_by_col:
                 legend_ws.append([])
                 legend_ws.append(["Branch", "Strength", "Green (Top 20%)", "Light Green (20-40%)", "Yellow (40-60%)", "Orange (60-80%)", "Red (Bottom 20%)"])
+                hdr_row_idx = legend_ws.max_row
+                for h_c in range(1, 8):
+                    hc = legend_ws.cell(row=hdr_row_idx, column=h_c)
+                    hc.fill = info_hdr_fill
+                    hc.font = info_hdr_font
+                    hc.alignment = center_align
+                    hc.border = header_border
+
                 row_tier_map = {}
                 for t_id, idxs in rank_tiers_by_col["TR"].items():
                     for i in idxs:
@@ -389,6 +554,11 @@ if page == "Results Analyzer (Excel)":
                             lo, hi = int(vals.min()), int(vals.max())
                             tier_ranges.append(f"{lo}" if lo == hi else f"{lo} - {hi}")
                     legend_ws.append([b_name, len(b_grp)] + tier_ranges)
+                    cur_r = legend_ws.max_row
+                    for d_c in range(1, 8):
+                        dc = legend_ws.cell(row=cur_r, column=d_c)
+                        dc.border = cell_border
+                        dc.alignment = left_align if d_c == 1 else center_align
 
             legend_ws.column_dimensions["A"].width = 30
             for col_let in ["B", "C", "D", "E", "F", "G"]:
